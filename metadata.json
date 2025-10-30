@@ -1,0 +1,5 @@
+{
+  "name": "Interior Design AI",
+  "description": "An AI-powered interior design tool that helps you visualize furniture layouts in your space. Upload a floor plan, search for real-world dimensioned furniture, and get intelligent suggestions for layout optimization and decor based on your personal style and budget.",
+  "requestFramePermissions": []
+}
