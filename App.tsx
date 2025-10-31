@@ -17,7 +17,7 @@ import type { Room, FurnitureItem, PlacedFurnitureItem, Suggestion, Point, Loadi
 import ArchitecturalPalette, { type ArchitecturalElement } from './components/ArchitecturalPalette';
 import DrawingCanvas from './components/DrawingCanvas';
 import { convertDrawnPlanToAnalysis, validateFloorPlan } from './utils/floorPlanConverter';
-import { vectorizeFloorPlan, initOpenCV } from './utils/floorPlanVectorizer';
+import { vectorizeFloorPlan, initOpenCV, type VectorizeResult } from './utils/floorPlanVectorizer';
 import { 
   DEFAULT_ROOM_WIDTH, 
   DEFAULT_ROOM_HEIGHT, 
@@ -53,6 +53,7 @@ function App() {
   const [lastAnalysisTime, setLastAnalysisTime] = useState(0);
   const [lastImageName, setLastImageName] = useState('');
   const [showTestCollector, setShowTestCollector] = useState(false);
+  const [vectorizedSvg, setVectorizedSvg] = useState<string | null>(null);
   const saveTimeoutRef = useRef<number | null>(null);
   
   // History management for undo/redo
@@ -462,13 +463,23 @@ function App() {
       try {
         // Step 1: Try client-side vectorization (free, fast, accurate)
         let processedBase64 = base64Data;
+        let vectorResult: VectorizeResult | null = null;
         try {
           console.log(`🎨 Step 1: Vectorizing floor plan (client-side)...`);
           setAnalysisMessage('Vectorizing floor plan...');
-          processedBase64 = await vectorizeFloorPlan(file);
-          console.log(`✅ Vectorization complete, using clean image for analysis`);
+          vectorResult = await vectorizeFloorPlan(file);
+          
+          // Convert SVG to base64 for Claude analysis
+          const svgBase64 = btoa(unescape(encodeURIComponent(vectorResult.svg)));
+          processedBase64 = svgBase64;
+          
+          // Save SVG for download
+          setVectorizedSvg(vectorResult.svg);
+          
+          console.log(`✅ Vectorization complete (SVG ${vectorResult.width}×${vectorResult.height})`);
         } catch (vecError) {
           console.warn(`⚠️  Vectorization failed, using original image:`, vecError);
+          setVectorizedSvg(null);
           // Continue with original image
         }
         
@@ -868,9 +879,9 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-gray-50 to-teal-50 text-gray-900 font-sans">
-      <header className="bg-white/80 backdrop-blur-md shadow-sm sticky top-0 z-10 border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-5">
+    <div className="min-h-screen bg-white text-gray-900 font-sans">
+      <header className="bg-white border-b border-gray-200 sticky top-0 z-10">
+        <div className="max-w-full px-6 py-4">
            <ProjectHeader 
             projectName={project.name}
             onRename={handleRenameProject}
@@ -883,47 +894,29 @@ function App() {
             canRedo={historyIndex < history.length - 1}
             onShowProjects={handleShowProjects}
           />
-          
-          {/* Drawing Mode Toggle */}
-          <button
-            onClick={handleToggleDrawingMode}
-            className={`
-              px-4 py-2 rounded-lg font-semibold transition-all duration-200 flex items-center gap-2
-              ${drawingMode === 'draw'
-                ? 'bg-indigo-600 text-white shadow-lg hover:bg-indigo-700'
-                : 'bg-white text-indigo-600 border-2 border-indigo-600 hover:bg-indigo-50'
-              }
-            `}
-            title={drawingMode === 'draw' ? 'Exit drawing mode' : 'Draw floor plan from scratch'}
-          >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-            </svg>
-            {drawingMode === 'draw' ? 'Done Drawing' : 'Draw Floor Plan'}
-          </button>
         </div>
       </header>
       
       {/* Error Display */}
       {error && (
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-4">
-          <div className="bg-red-50 border-l-4 border-red-400 p-4 rounded-r-lg shadow-sm">
+        <div className="px-6 pt-4">
+          <div className="bg-red-50 border border-red-200 p-4 rounded-lg">
             <div className="flex items-start">
               <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                <svg className="h-5 w-5 text-red-500" viewBox="0 0 20 20" fill="currentColor">
                   <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
                 </svg>
               </div>
               <div className="ml-3 flex-1">
                 <h3 className="text-sm font-medium text-red-800">Error</h3>
-                <div className="mt-2 text-sm text-red-700 whitespace-pre-line">
+                <div className="mt-1 text-sm text-red-700 whitespace-pre-line">
                   {error.message}
                 </div>
               </div>
               <div className="ml-auto pl-3">
                 <button
                   onClick={() => setError(null)}
-                  className="inline-flex rounded-md p-1.5 text-red-500 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-red-600"
+                  className="inline-flex rounded-md p-1.5 text-red-500 hover:bg-red-100"
                 >
                   <span className="sr-only">Dismiss</span>
                   <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -1050,6 +1043,44 @@ function App() {
                 {project.room.analysis && (
                   <FloorPlanMetrics analysis={project.room.analysis} />
                 )}
+                
+                {/* SVG Preview & Download */}
+                {vectorizedSvg && project.room.analysis && (
+                  <div className="bg-white p-4 rounded-xl shadow-lg border-2 border-emerald-200">
+                    <h3 className="text-lg font-bold text-gray-800 mb-3 flex items-center gap-2">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      Vectorized Floor Plan
+                    </h3>
+                    
+                    {/* SVG Preview */}
+                    <div className="mb-3 border-2 border-gray-200 rounded-lg overflow-hidden bg-gray-50 max-h-48">
+                      <div 
+                        className="w-full"
+                        dangerouslySetInnerHTML={{ __html: vectorizedSvg }}
+                        style={{ maxHeight: '12rem', overflow: 'auto' }}
+                      />
+                    </div>
+                    
+                    {/* Download Button */}
+                    <a
+                      download="floorplan_vectorized.svg"
+                      href={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(vectorizedSvg)}`}
+                      className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-semibold rounded-lg hover:from-emerald-600 hover:to-emerald-700 transition-all shadow-md"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                      </svg>
+                      Download Vector SVG
+                    </a>
+                    
+                    <p className="text-xs text-gray-500 mt-2 text-center">
+                      ✨ Scalable vector format • Perfect for printing & editing
+                    </p>
+                  </div>
+                )}
+                
                 {project.room.analysis && showTestCollector && (
                   <TestDataCollector 
                     analysis={project.room.analysis}

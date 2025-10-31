@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import type { PlacedFurnitureItem, Room, FurnitureItem, Point, RoomZone, Project } from '../types';
 import { exportCanvasAsImage } from '../utils/exportUtils';
 import {
@@ -65,9 +65,100 @@ const DesignCanvas: React.FC<DesignCanvasProps> = ({
   const [showMeasurements, setShowMeasurements] = useState(false);
   const [showGrid, setShowGrid] = useState(true); // Default to ON for floor plans
   
+  // Draggable annotation positions
+  const [annotationPositions, setAnnotationPositions] = useState(() => {
+    const saved = localStorage.getItem('annotationPositions');
+    return saved ? JSON.parse(saved) : {
+      legend: { x: 20, y: 20 },
+      scaleBar: { x: 60, y: -1 }, // -1 means calculate from bottom
+      northArrow: { x: -1, y: 60 }, // -1 means calculate from right
+      titleBlock: { x: -1, y: -1 } // -1 means calculate from right/bottom
+    };
+  });
+  const [draggedAnnotation, setDraggedAnnotation] = useState<{ type: string; offset: Point } | null>(null);
+  
   const INCHES_PER_FOOT = 12;
   const roomWidthInches = room.width * INCHES_PER_FOOT;
   const roomHeightInches = room.height * INCHES_PER_FOOT;
+  
+  // Save annotation positions to localStorage
+  useEffect(() => {
+    localStorage.setItem('annotationPositions', JSON.stringify(annotationPositions));
+  }, [annotationPositions]);
+  
+  // Calculate actual positions for annotations
+  const getAnnotationPosition = (type: 'legend' | 'scaleBar' | 'northArrow' | 'titleBlock', scale: number) => {
+    const pos = annotationPositions[type];
+    const canvasWidth = roomWidthInches * scale;
+    const canvasHeight = roomHeightInches * scale;
+    
+    return {
+      x: pos.x === -1 ? canvasWidth - (type === 'northArrow' ? 60 : 360) : pos.x,
+      y: pos.y === -1 ? canvasHeight - (type === 'scaleBar' ? 40 : 100) : pos.y
+    };
+  };
+  
+  // Handle annotation drag start
+  const handleAnnotationMouseDown = (e: React.MouseEvent, type: string) => {
+    e.stopPropagation();
+    const svg = svgRef.current;
+    if (!svg) return;
+    
+    const rect = svg.getBoundingClientRect();
+    const scale = Math.min(
+      (rect.width - 60) / roomWidthInches,
+      (rect.height - 60) / roomHeightInches
+    );
+    
+    const mouseX = (e.clientX - rect.left - 30) / scale;
+    const mouseY = (e.clientY - rect.top - 30) / scale;
+    
+    const pos = getAnnotationPosition(type as any, 1);
+    
+    setDraggedAnnotation({
+      type,
+      offset: { x: mouseX - pos.x, y: mouseY - pos.y }
+    });
+  };
+  
+  // Handle annotation drag move
+  const handleAnnotationMouseMove = useCallback((e: MouseEvent) => {
+    if (!draggedAnnotation || !svgRef.current) return;
+    
+    const rect = svgRef.current.getBoundingClientRect();
+    const scale = Math.min(
+      (rect.width - 60) / roomWidthInches,
+      (rect.height - 60) / roomHeightInches
+    );
+    
+    const mouseX = (e.clientX - rect.left - 30) / scale;
+    const mouseY = (e.clientY - rect.top - 30) / scale;
+    
+    setAnnotationPositions(prev => ({
+      ...prev,
+      [draggedAnnotation.type]: {
+        x: mouseX - draggedAnnotation.offset.x,
+        y: mouseY - draggedAnnotation.offset.y
+      }
+    }));
+  }, [draggedAnnotation, roomWidthInches, roomHeightInches]);
+  
+  // Handle annotation drag end
+  const handleAnnotationMouseUp = useCallback(() => {
+    setDraggedAnnotation(null);
+  }, []);
+  
+  // Add/remove annotation drag listeners
+  useEffect(() => {
+    if (draggedAnnotation) {
+      window.addEventListener('mousemove', handleAnnotationMouseMove);
+      window.addEventListener('mouseup', handleAnnotationMouseUp);
+      return () => {
+        window.removeEventListener('mousemove', handleAnnotationMouseMove);
+        window.removeEventListener('mouseup', handleAnnotationMouseUp);
+      };
+    }
+  }, [draggedAnnotation, handleAnnotationMouseMove, handleAnnotationMouseUp]);
 
   const getScale = () => {
     if (!svgRef.current) return 1;
@@ -595,47 +686,75 @@ const DesignCanvas: React.FC<DesignCanvasProps> = ({
         {/* FIXTURES - Kitchen and bathroom fixtures */}
         {fixtures && fixtures.map((fixture, i) => renderFixture(fixture, sx, sy, scale, i))}
 
-        {/* ANNOTATIONS - Architectural elements */}
-        {/* North Arrow - top right corner */}
-        {renderNorthArrow(
-          roomWidthInches * scale - 60,
-          60,
-          northAngle || 0,
-          40
-        )}
+        {/* ANNOTATIONS - Architectural elements (Draggable) */}
+        
+        {/* North Arrow - draggable */}
+        <g
+          transform={`translate(${getAnnotationPosition('northArrow', scale).x}, ${getAnnotationPosition('northArrow', scale).y})`}
+          onMouseDown={(e) => handleAnnotationMouseDown(e, 'northArrow')}
+          className="cursor-move"
+          style={{ opacity: draggedAnnotation?.type === 'northArrow' ? 0.7 : 1 }}
+        >
+          <rect x="-5" y="-5" width="60" height="60" fill="transparent" stroke="none" className="hover:fill-blue-50 hover:stroke-blue-300 hover:stroke-1" />
+          {renderNorthArrow(0, 0, northAngle || 0, 40)}
+          <text x="20" y="-10" fontSize="8" fill="#6b7280" textAnchor="middle" className="pointer-events-none select-none">
+            ✋ Drag
+          </text>
+        </g>
 
-        {/* Scale Bar - bottom left */}
-        {renderScaleBar(
-          60,
-          roomHeightInches * scale - 40,
-          `0' ${Math.round(room.width / 4)}'  ${Math.round(room.width / 2)}'`,
-          room.width * 12 * scale / 2
-        )}
+        {/* Scale Bar - draggable */}
+        <g
+          transform={`translate(${getAnnotationPosition('scaleBar', scale).x}, ${getAnnotationPosition('scaleBar', scale).y})`}
+          onMouseDown={(e) => handleAnnotationMouseDown(e, 'scaleBar')}
+          className="cursor-move"
+          style={{ opacity: draggedAnnotation?.type === 'scaleBar' ? 0.7 : 1 }}
+        >
+          <rect x="-5" y="-15" width="200" height="40" fill="transparent" stroke="none" className="hover:fill-blue-50 hover:stroke-blue-300 hover:stroke-1" />
+          {renderScaleBar(0, 0, `0' ${Math.round(room.width / 4)}'  ${Math.round(room.width / 2)}'`, room.width * 12 * scale / 2)}
+          <text x="100" y="-20" fontSize="8" fill="#6b7280" textAnchor="middle" className="pointer-events-none select-none">
+            ✋ Drag to move
+          </text>
+        </g>
 
         {/* Entry Arrow - if entry door is defined */}
         {entryDoor && renderEntryArrow(entryDoor, sx, sy, scale, 30)}
 
-        {/* Title Block - bottom right */}
-        {renderTitleBlock(
-          roomWidthInches * scale - 360,
-          roomHeightInches * scale - 100,
-          project.name,
-          roomDimString,
-          totalSqFt,
-          `1" = ${(room.width / (roomWidthInches * scale / 96)).toFixed(1)}'`
-        )}
+        {/* Title Block - draggable */}
+        <g
+          transform={`translate(${getAnnotationPosition('titleBlock', scale).x}, ${getAnnotationPosition('titleBlock', scale).y})`}
+          onMouseDown={(e) => handleAnnotationMouseDown(e, 'titleBlock')}
+          className="cursor-move"
+          style={{ opacity: draggedAnnotation?.type === 'titleBlock' ? 0.7 : 1 }}
+        >
+          <rect x="-5" y="-5" width="370" height="110" fill="transparent" stroke="none" className="hover:fill-blue-50 hover:stroke-blue-300 hover:stroke-1" />
+          {renderTitleBlock(0, 0, project.name, roomDimString, totalSqFt, `1" = ${(room.width / (roomWidthInches * scale / 96)).toFixed(1)}'`)}
+          <text x="180" y="-10" fontSize="8" fill="#6b7280" textAnchor="middle" className="pointer-events-none select-none">
+            ✋ Drag to reposition
+          </text>
+        </g>
 
-        {/* Legend - top left */}
-        {renderLegend(
-          20,
-          20,
-          [
-            { abbr: 'Ref', meaning: 'Refrigerator' },
-            { abbr: 'DW', meaning: 'Dishwasher' },
-            { abbr: 'W/D', meaning: 'Washer/Dryer' },
-            { abbr: 'CL', meaning: 'Closet' }
-          ]
-        )}
+        {/* Legend - draggable */}
+        <g
+          transform={`translate(${getAnnotationPosition('legend', scale).x}, ${getAnnotationPosition('legend', scale).y})`}
+          onMouseDown={(e) => handleAnnotationMouseDown(e, 'legend')}
+          className="cursor-move"
+          style={{ opacity: draggedAnnotation?.type === 'legend' ? 0.7 : 1 }}
+        >
+          <rect x="-5" y="-5" width="160" height="140" fill="transparent" stroke="none" className="hover:fill-blue-50 hover:stroke-blue-300 hover:stroke-1" />
+          {renderLegend(
+            0,
+            0,
+            [
+              { abbr: 'Ref', meaning: 'Refrigerator' },
+              { abbr: 'DW', meaning: 'Dishwasher' },
+              { abbr: 'W/D', meaning: 'Washer/Dryer' },
+              { abbr: 'CL', meaning: 'Closet' }
+            ]
+          )}
+          <text x="80" y="-10" fontSize="8" fill="#6b7280" textAnchor="middle" className="pointer-events-none select-none">
+            ✋ Drag to move
+          </text>
+        </g>
       </g>
     );
   };
@@ -906,6 +1025,27 @@ const DesignCanvas: React.FC<DesignCanvasProps> = ({
             );
           })}
         </svg>
+        
+        {/* Annotation controls */}
+        <div className="absolute top-4 right-4 flex flex-col gap-2">
+          <button
+            onClick={() => {
+              setAnnotationPositions({
+                legend: { x: 20, y: 20 },
+                scaleBar: { x: 60, y: -1 },
+                northArrow: { x: -1, y: 60 },
+                titleBlock: { x: -1, y: -1 }
+              });
+            }}
+            className="px-3 py-2 bg-white text-gray-700 text-xs font-semibold rounded-lg shadow-md hover:bg-gray-50 border border-gray-200 transition-colors flex items-center gap-2"
+            title="Reset annotation positions to default"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            Reset Positions
+          </button>
+        </div>
       </div>
     </div>
   );
